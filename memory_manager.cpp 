@@ -1,0 +1,376 @@
+
+#include <iostream>
+#include <vector>
+#include <iomanip>
+#include <string>
+#include <limits>
+#include <algorithm>
+
+using namespace std;
+
+// Represents one block in the simulated heap.
+struct MemoryBlock {
+    int start;
+    int size;
+    bool free;
+    int id;
+};
+
+class MemoryManager {
+private:
+    vector<MemoryBlock> heap;
+    int heapSize;
+    int nextId;
+
+public:
+    // Initialize the heap as one large free block.
+    explicit MemoryManager(int size) : heapSize(size), nextId(1) {
+        heap.push_back({0, size, true, -1});
+    }
+
+    // Display the current state of the heap.
+    void displayHeap() const {
+        cout << "\n========== HEAP STATUS ==========\n";
+
+        for (const auto& block : heap) {
+            cout << "Address: " << setw(4) << block.start
+                 << " | Size: " << setw(4) << block.size
+                 << " | Status: "
+                 << (block.free ? "FREE" : "USED")
+                 << " | ID: ";
+
+            if (block.free)
+                cout << "-";
+            else
+                cout << block.id;
+
+            cout << '\n';
+        }
+
+        cout << "---------------------------------\n";
+        cout << "Total heap size: " << heapSize << '\n';
+        cout << "Free memory: " << getFreeMemory() << '\n';
+        cout << "Used memory: " << heapSize - getFreeMemory() << '\n';
+        cout << "Largest free block: " << getLargestFreeBlock() << '\n';
+        cout << "=================================\n";
+    }
+
+    int getFreeMemory() const {
+        int total = 0;
+
+        for (const auto& block : heap) {
+            if (block.free)
+                total += block.size;
+        }
+
+        return total;
+    }
+
+    int getLargestFreeBlock() const {
+        int largest = 0;
+
+        for (const auto& block : heap) {
+            if (block.free)
+                largest = max(largest, block.size);
+        }
+
+        return largest;
+    }
+
+    // First-fit allocation: use the first free block large enough.
+    int allocate(int requestedSize) {
+        if (requestedSize <= 0) {
+            cout << "Error: Allocation size must be positive.\n";
+            return -1;
+        }
+
+        for (size_t i = 0; i < heap.size(); ++i) {
+            if (heap[i].free && heap[i].size >= requestedSize) {
+                int id = nextId++;
+                int remaining = heap[i].size - requestedSize;
+                int start = heap[i].start;
+
+                heap[i] = {start, requestedSize, false, id};
+
+                // Split the free block if extra space remains.
+                if (remaining > 0) {
+                    heap.insert(
+                        heap.begin() + i + 1,
+                        {start + requestedSize, remaining, true, -1}
+                    );
+                }
+
+                cout << "Allocated " << requestedSize
+                     << " units. Block ID: " << id
+                     << ", Address: " << start << '\n';
+
+                displayHeap();
+                return id;
+            }
+        }
+
+        cout << "Allocation failed: Not enough contiguous memory.\n";
+        displayHeap();
+        return -1;
+    }
+
+    // Release a previously allocated block.
+    bool deallocate(int id) {
+        for (auto& block : heap) {
+            if (!block.free && block.id == id) {
+                block.free = true;
+                block.id = -1;
+
+                cout << "Block " << id << " freed successfully.\n";
+
+                coalesce();
+                displayHeap();
+                return true;
+            }
+        }
+
+        cout << "Error: Invalid block ID or block already freed.\n";
+        return false;
+    }
+
+    // Merge adjacent free blocks to reduce external fragmentation.
+    void coalesce() {
+        for (size_t i = 0; i + 1 < heap.size();) {
+            if (heap[i].free && heap[i + 1].free) {
+                heap[i].size += heap[i + 1].size;
+
+                heap.erase(heap.begin() + i + 1);
+                // Check the same position again for further merging.
+            } else {
+                ++i;
+            }
+        }
+    }
+
+    // Check whether a block ID and offset refer to allocated memory.
+    bool checkAccess(int id, int offset) const {
+        for (const auto& block : heap) {
+            if (!block.free && block.id == id) {
+                if (offset >= 0 && offset < block.size) {
+                    cout << "Valid access at simulated address "
+                         << block.start + offset << ".\n";
+                    return true;
+                }
+
+                cout << "Error: Offset is outside the block bounds.\n";
+                return false;
+            }
+        }
+
+        cout << "Error: Invalid or freed block ID.\n";
+        return false;
+    }
+
+    // Reallocate a block to a new size.
+    bool reallocate(int id, int newSize) {
+        if (newSize <= 0) {
+            cout << "Error: New size must be positive.\n";
+            return false;
+        }
+
+        size_t index = heap.size();
+
+        for (size_t i = 0; i < heap.size(); ++i) {
+            if (!heap[i].free && heap[i].id == id) {
+                index = i;
+                break;
+            }
+        }
+
+        if (index == heap.size()) {
+            cout << "Error: Invalid block ID.\n";
+            return false;
+        }
+
+        int oldSize = heap[index].size;
+        int start = heap[index].start;
+
+        // Shrinking a block releases the unused tail.
+        if (newSize <= oldSize) {
+            heap[index].size = newSize;
+
+            if (newSize < oldSize) {
+                heap.insert(
+                    heap.begin() + index + 1,
+                    {start + newSize, oldSize - newSize, true, -1}
+                );
+                coalesce();
+            }
+
+            cout << "Block " << id << " resized to "
+                 << newSize << " units.\n";
+            displayHeap();
+            return true;
+        }
+
+        // Expand into the next free block when possible.
+        int extra = newSize - oldSize;
+
+        if (index + 1 < heap.size() &&
+            heap[index + 1].free &&
+            heap[index + 1].size >= extra) {
+
+            if (heap[index + 1].size == extra) {
+                heap.erase(heap.begin() + index + 1);
+            } else {
+                heap[index + 1].start += extra;
+                heap[index + 1].size -= extra;
+            }
+
+            heap[index].size = newSize;
+
+            cout << "Block " << id << " expanded in place.\n";
+            displayHeap();
+            return true;
+        }
+
+        // Otherwise allocate a new block, then release the old one.
+        int newId = allocate(newSize);
+
+        if (newId == -1) {
+            cout << "Reallocation failed; original block preserved.\n";
+            return false;
+        }
+
+        for (auto& block : heap) {
+            if (!block.free && block.id == id) {
+                block.free = true;
+                block.id = -1;
+                break;
+            }
+        }
+
+        // Keep the original ID for the resized allocation.
+        for (auto& block : heap) {
+            if (!block.free && block.id == newId) {
+                block.id = id;
+                break;
+            }
+        }
+
+        coalesce();
+
+        cout << "Block " << id << " reallocated to "
+             << newSize << " units.\n";
+        displayHeap();
+        return true;
+    }
+};
+
+int main() {
+    int size;
+
+    cout << "===== C++ MEMORY MANAGEMENT SIMULATOR =====\n";
+    cout << "Enter total heap size: ";
+
+    if (!(cin >> size) || size <= 0) {
+        cout << "Error: Enter a valid positive heap size.\n";
+        return 1;
+    }
+
+    MemoryManager manager(size);
+    manager.displayHeap();
+
+    int choice;
+
+    do {
+        cout << "\n----------- MENU -----------\n";
+        cout << "1. Allocate memory\n";
+        cout << "2. Free memory\n";
+        cout << "3. Display heap\n";
+        cout << "4. Reallocate memory\n";
+        cout << "5. Check memory access\n";
+        cout << "0. Exit\n";
+        cout << "Choose an option: ";
+
+        if (!(cin >> choice)) {
+            cout << "Invalid input. Please enter a number.\n";
+            cin.clear();
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            continue;
+        }
+
+        int id, amount, offset;
+
+        switch (choice) {
+            case 1:
+                cout << "Enter allocation size: ";
+                if (cin >> amount)
+                    manager.allocate(amount);
+                else {
+                    cout << "Invalid size input.\n";
+                    cin.clear();
+                    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                }
+                break;
+
+            case 2:
+                cout << "Enter block ID to free: ";
+                if (cin >> id)
+                    manager.deallocate(id);
+                else {
+                    cout << "Invalid ID input.\n";
+                    cin.clear();
+                    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                }
+                break;
+
+            case 3:
+                manager.displayHeap();
+                break;
+
+            case 4:
+                cout << "Enter block ID: ";
+                if (!(cin >> id)) {
+                    cout << "Invalid ID input.\n";
+                    cin.clear();
+                    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                    break;
+                }
+
+                cout << "Enter new size: ";
+                if (cin >> amount)
+                    manager.reallocate(id, amount);
+                else {
+                    cout << "Invalid size input.\n";
+                    cin.clear();
+                    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                }
+                break;
+
+            case 5:
+                cout << "Enter block ID: ";
+                if (!(cin >> id)) {
+                    cout << "Invalid ID input.\n";
+                    cin.clear();
+                    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                    break;
+                }
+
+                cout << "Enter offset within block: ";
+                if (cin >> offset)
+                    manager.checkAccess(id, offset);
+                else {
+                    cout << "Invalid offset input.\n";
+                    cin.clear();
+                    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                }
+                break;
+
+            case 0:
+                cout << "Exiting Memory Manager. Goodbye!\n";
+                break;
+
+            default:
+                cout << "Invalid choice. Try again.\n";
+        }
+
+    } while (choice != 0);
+
+    return 0;
+}
